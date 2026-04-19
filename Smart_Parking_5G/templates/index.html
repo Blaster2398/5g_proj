@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>5G Smart Parking System</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #121212;
+            color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            color: #00ffcc;
+        }
+        .video-container {
+            border: 4px solid #333;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 0 20px rgba(0, 255, 204, 0.2);
+            margin-top: 20px;
+        }
+        img {
+            max-width: 100%;
+            height: auto;
+            display: block;
+        }
+        .status-panel {
+            margin-top: 15px;
+            display: flex;
+            gap: 20px;
+        }
+        .badge {
+            padding: 10px 20px;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .free { background: #008000; }
+        .occupied { background: #cc0000; }
+        .obstacle { background: #cccc00; color: #000; }
+    </style>
+</head>
+<body>
+    <h1>5G Smart Parking Dashboard</h1>
+    
+    <div class="status-panel">
+        <div class="badge free">Green: Free Slot</div>
+        <div class="badge occupied">Red: Occupied</div>
+        <div class="badge obstacle">Yellow: Obstacle/Animal</div>
+    </div>
+
+    <div class="video-container">
+        <img src="{{ url_for('video_feed') }}" alt="Live Parking Feed">
+    </div>
+</body>
+</html>
