@@ -5,7 +5,7 @@ import numpy as np
 
 os.makedirs('data', exist_ok=True)
 
-IMAGE_SOURCE = "data/sample_parking.png" 
+IMAGE_SOURCE = "data/baseline.png" 
 JSON_PATH = 'data/parking_zones.json'
 
 points = []
