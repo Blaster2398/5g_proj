@@ -5,57 +5,132 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>5G Smart Parking System</title>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            background-color: #121212;
-            color: #ffffff;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            margin: 0;
-            padding: 20px;
-        }
-        h1 {
-            color: #00ffcc;
-        }
-        .video-container {
-            border: 4px solid #333;
-            border-radius: 10px;
-            overflow: hidden;
-            box-shadow: 0 0 20px rgba(0, 255, 204, 0.2);
-            margin-top: 20px;
-        }
-        img {
-            max-width: 100%;
-            height: auto;
-            display: block;
-        }
-        .status-panel {
-            margin-top: 15px;
-            display: flex;
-            gap: 20px;
-        }
-        .badge {
-            padding: 10px 20px;
-            border-radius: 5px;
-            font-weight: bold;
-        }
-        .free { background: #008000; }
-        .occupied { background: #cc0000; }
-        .obstacle { background: #cccc00; color: #000; }
+        body { font-family: Arial, sans-serif; background-color: #121212; color: #ffffff; display: flex; flex-direction: column; align-items: center; margin: 0; padding: 20px; }
+        h1 { color: #00ffcc; }
+        .video-container { border: 4px solid #333; border-radius: 10px; overflow: hidden; box-shadow: 0 0 20px rgba(0, 255, 204, 0.2); margin-top: 20px; }
+        img { max-width: 100%; height: auto; display: block; }
+        .controls { margin-top: 15px; display: flex; gap: 15px; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; border: none; border-radius: 5px; font-weight: bold; transition: 0.3s; }
+        .btn-base { background: #333; color: white; }
+        .btn-enter { background: #00ffcc; color: black; }
+        .btn-exit { background: #ffaa00; color: black; }
+        .btn-set { background: #9b5de5; color: white; }
+        button:hover { opacity: 0.8; }
+        #summary { margin-top: 10px; }
+        #paths { width: 100%; max-width: 980px; margin-top: 8px; font-size: 14px; color: #d0f6ff; }
     </style>
 </head>
 <body>
     <h1>5G Smart Parking Dashboard</h1>
     
-    <div class="status-panel">
-        <div class="badge free">Green: Free Slot</div>
-        <div class="badge occupied">Red: Occupied</div>
-        <div class="badge obstacle">Yellow: Obstacle/Animal</div>
+    <div class="controls">
+        <button id="btn-baseline" class="btn-base">1. Empty Lot Baseline</button>
+        <button id="btn-entering" class="btn-enter">2. Vehicle Entering</button>
+        <button id="btn-exiting" class="btn-exit">3. Vehicle Exiting</button>
+        <button id="btn-live" class="btn-enter">4. Live RTSP Feed</button>
+        <button id="btn-set-entry" class="btn-set">5. Set Entry Point</button>
+        <button id="btn-set-exit" class="btn-set">6. Set Exit Point</button>
     </div>
 
     <div class="video-container">
-        <img src="{{ url_for('video_feed') }}" alt="Live Parking Feed">
+        <img id="dashboard-feed" src="/process_image?img=baseline.png" alt="Live Parking Feed">
     </div>
+    <p id="summary">Loading slot summary...</p>
+    <p id="mode">Point mode: none</p>
+    <div id="paths">Loading route details...</div>
+
+    <script>
+        // Feature 34: Simplified, robust UI wiring and polling lifecycle
+        (() => {
+            let pointMode = null;
+            let currentFeed = 'static';
+            const feed = document.getElementById('dashboard-feed');
+            const summary = document.getElementById('summary');
+            const mode = document.getElementById('mode');
+            const paths = document.getElementById('paths');
+
+            function changeImage(imageName) {
+                feed.src = `/process_image?img=${imageName}&t=${Date.now()}`;
+                currentFeed = 'static';
+            }
+
+            function useLiveFeed() {
+                feed.src = '/video_feed';
+                currentFeed = 'live';
+            }
+
+            function setPointMode(nextMode) {
+                pointMode = nextMode;
+                mode.innerText = `Point mode: ${nextMode}`;
+            }
+
+            async function saveManualPoint(kind, x, y) {
+                await fetch('/api/manual_points', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ [`${kind}_point`]: [Math.round(x), Math.round(y)] }),
+                });
+            }
+
+            async function refreshSummary() {
+                try {
+                    const res = await fetch('/api/slot_summary');
+                    const data = await res.json();
+                    summary.innerText = `Status: ${data.status} | Free: ${data.free_slots} | Occupied: ${data.occupied_slots} | Unknown: ${data.unknown_slots} | FPS: ${data.fps}`;
+                } catch (_e) {
+                    summary.innerText = 'Status API unavailable';
+                }
+            }
+
+            async function refreshPaths() {
+                try {
+                    const res = await fetch('/api/path_details');
+                    const data = await res.json();
+                    if (!data.paths || data.paths.length === 0) {
+                        paths.innerText = 'No active routed vehicles.';
+                        return;
+                    }
+                    const lines = data.paths.map((p) => {
+                        const dims = p.car_dimensions || {};
+                        const steps = (p.instructions || []).join(' -> ');
+                        return `Track ${p.track_id} | ${p.direction} | target: ${p.target} | car(px): L=${dims.length_px || 0}, W=${dims.width_px || 0} | route: ${steps}`;
+                    });
+                    paths.innerText = lines.join('\n');
+                } catch (_e) {
+                    paths.innerText = 'Path details API unavailable';
+                }
+            }
+
+            document.getElementById('btn-baseline').addEventListener('click', () => changeImage('baseline.png'));
+            document.getElementById('btn-entering').addEventListener('click', () => changeImage('entering.png'));
+            document.getElementById('btn-exiting').addEventListener('click', () => changeImage('exiting.png'));
+            document.getElementById('btn-live').addEventListener('click', useLiveFeed);
+            document.getElementById('btn-set-entry').addEventListener('click', () => setPointMode('entry'));
+            document.getElementById('btn-set-exit').addEventListener('click', () => setPointMode('exit'));
+
+            feed.addEventListener('click', async (ev) => {
+                if (!pointMode) return;
+                const rect = feed.getBoundingClientRect();
+                const scaleX = feed.naturalWidth / rect.width;
+                const scaleY = feed.naturalHeight / rect.height;
+                const x = (ev.clientX - rect.left) * scaleX;
+                const y = (ev.clientY - rect.top) * scaleY;
+                await saveManualPoint(pointMode, x, y);
+                mode.innerText = `${pointMode} point saved at (${Math.round(x)}, ${Math.round(y)})`;
+                pointMode = null;
+                if (currentFeed === 'live') {
+                    useLiveFeed();
+                } else {
+                    const base = feed.src.includes('&t=') ? feed.src.split('&t=')[0] : feed.src;
+                    feed.src = `${base}&t=${Date.now()}`;
+                }
+            });
+
+            refreshSummary();
+            refreshPaths();
+            setInterval(refreshSummary, 2000);
+            setInterval(refreshPaths, 2000);
+        })();
+    </script>
 </body>
 </html>
