@@ -452,6 +452,24 @@ class StreamEngine:
         fps = 1.0 / elapsed
         self.health["fps"] = round((self.health["fps"] * 0.9) + (fps * 0.1), 2)
         self.last_fps_ts = now
+        
+    def _draw_yolo_boxes(self, frame, detections):
+        """Draws raw YOLO bounding boxes and the physical anchor points for debugging."""
+        for box in detections:
+            x1, y1, x2, y2, class_id = box
+            
+            # Draw the raw YOLO bounding box in Pink
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 255), 2)
+            cv2.putText(frame, f"YOLO cls:{class_id}", (x1, max(15, y1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2)
+            
+            # Draw the Anchor Points (used for slot assignment)
+            center_x = int((x1 + x2) / 2)
+            anchor_bottom = (center_x, int(y2 - ((y2 - y1) * 0.05)))
+            anchor_middle = (center_x, int(y2 - ((y2 - y1) * 0.20)))
+            
+            # Red dot for bottom anchor, Blue dot for middle anchor
+            cv2.circle(frame, anchor_bottom, 5, (0, 0, 255), -1) 
+            cv2.circle(frame, anchor_middle, 5, (255, 0, 0), -1)
 
     def process_frame(self, frame, force_infer=False):
         if frame is None:
@@ -469,9 +487,21 @@ class StreamEngine:
         else:
             detections = self.last_detections
 
+        # Replace these two lines in stream_engine.py:
         slot_status_raw, _ = check_parking_status(detections, self.zones)
         slot_status = self.smoother.update(slot_status_raw)
+
+        # WITH THIS:
+        # slot_status_raw, _ = check_parking_status(detections, self.zones)
+        
+        # Feature 38: Bypass smoother in static mode so UI updates instantly
+        if self.config.stream_mode == "static":
+            slot_status = slot_status_raw
+        else:
+            slot_status = self.smoother.update(slot_status_raw)
         tracks = self.tracker.update(detections)
+
+        self._draw_yolo_boxes(frame, detections)
 
         self._draw_slots(frame, slot_status)
         self._draw_markers(frame)
@@ -491,6 +521,11 @@ class StreamEngine:
 
     # Feature 31: Static image processing path that updates health/summary/path APIs
     def process_image_file(self, image_path):
+        self.tracker = SimpleTracker() 
+        self.last_detections = []
+        self.last_paths = []
+
+        
         frame = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
         if frame is None:
             self.health["last_error"] = f"image_not_found:{image_path}"

@@ -24,12 +24,12 @@
     <h1>5G Smart Parking Dashboard</h1>
     
     <div class="controls">
-        <button id="btn-baseline" class="btn-base">1. Empty Lot Baseline</button>
-        <button id="btn-entering" class="btn-enter">2. Vehicle Entering</button>
-        <button id="btn-exiting" class="btn-exit">3. Vehicle Exiting</button>
+        <button id="btn-baseline" class="btn-base">1. Baseline (ROI Ref)</button>
+        <button id="btn-frame1" class="btn-enter">2. Load Frame 1</button>
+        <button id="btn-frame2" class="btn-exit">3. Load Frame 2</button>
         <button id="btn-live" class="btn-enter">4. Live RTSP Feed</button>
-        <button id="btn-set-entry" class="btn-set">5. Set Entry Point</button>
-        <button id="btn-set-exit" class="btn-set">6. Set Exit Point</button>
+        <button id="btn-set-entry" class="btn-set">5. Set Entry</button>
+        <button id="btn-set-exit" class="btn-set">6. Set Exit</button>
     </div>
 
     <div class="video-container">
@@ -101,9 +101,11 @@
                 }
             }
 
+            // Update the event listeners to match the new buttons and file names
             document.getElementById('btn-baseline').addEventListener('click', () => changeImage('baseline.png'));
-            document.getElementById('btn-entering').addEventListener('click', () => changeImage('entering.png'));
-            document.getElementById('btn-exiting').addEventListener('click', () => changeImage('exiting.png'));
+            document.getElementById('btn-frame1').addEventListener('click', () => changeImage('frame1.png'));
+            document.getElementById('btn-frame2').addEventListener('click', () => changeImage('frame2.png'));
+            
             document.getElementById('btn-live').addEventListener('click', useLiveFeed);
             document.getElementById('btn-set-entry').addEventListener('click', () => setPointMode('entry'));
             document.getElementById('btn-set-exit').addEventListener('click', () => setPointMode('exit'));
