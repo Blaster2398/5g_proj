@@ -139,6 +139,10 @@ class StreamEngine:
         self.target_classes = [2, 3, 5, 7, 15, 16]
         self.vehicle_classes = [2, 3, 5, 7]
         self.zones = load_zones(self.config.zone_path)
+        
+        # FIXED Error 1: _load_road_network is now properly inside the class
+        self.road_nodes, self.road_graph = self._load_road_network("data/road_network.json")
+        
         self._load_manual_points()
         self.tracker = SimpleTracker()
         self.smoother = SlotStateSmoother(
@@ -160,6 +164,28 @@ class StreamEngine:
         self.last_paths = []
         self.frame_count = 0
         self.last_fps_ts = time.time()
+
+    def _load_road_network(self, filepath):
+        if not os.path.exists(filepath):
+            print(f"Warning: Road network {filepath} not found.")
+            return {}, {}
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            nodes = data.get("nodes", {})
+            edges = data.get("edges", [])
+            
+            # Build an Adjacency List for fast A* traversal
+            graph = {n: [] for n in nodes.keys()}
+            for edge in edges:
+                n1, n2 = edge[0], edge[1]
+                if n1 in graph and n2 in graph:
+                    graph[n1].append(n2)
+                    graph[n2].append(n1)
+            return nodes, graph
+        except Exception as exc:
+            log_event("road_network_load_failed", error=str(exc))
+            return {}, {}
 
     # Feature 22: Manual entry/exit configuration persisted on disk
     def _load_manual_points(self):
@@ -190,7 +216,12 @@ class StreamEngine:
             self.config.exit_line = tuple(tuple(v) for v in payload["exit_line"])
 
         path = self.config.manual_points_path
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        
+        # FIXED Error 3: Safely create directories avoiding empty path crash
+        dirpath = os.path.dirname(path)
+        if dirpath:
+            os.makedirs(dirpath, exist_ok=True)
+            
         with open(path, "w", encoding="utf-8") as f:
             json.dump(
                 {
@@ -247,12 +278,31 @@ class StreamEngine:
             frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
         elif len(frame.shape) == 3 and frame.shape[2] == 4:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
-        results = self.model(frame, classes=self.target_classes, verbose=False)[0]
+            
+        # Added conf=0.50 to filter out low-confidence hallucinations
+        results = self.model(frame, classes=self.target_classes, conf=0.40, imgsz=1280, verbose=False)[0]
         detections = []
         for box in results.boxes.data.tolist():
             x1, y1, x2, y2, _score, class_id = box
             detections.append([int(x1), int(y1), int(x2), int(y2), int(class_id)])
         return detections
+
+    def _draw_yolo_boxes(self, frame, detections):
+        """Draws raw YOLO bounding boxes and the physical anchor points for debugging."""
+        for box in detections:
+            x1, y1, x2, y2, class_id = box
+            
+            # Draw the raw YOLO bounding box in Pink
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 255), 2)
+            cv2.putText(frame, f"YOLO cls:{class_id}", (x1, max(15, y1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2)
+            
+            # Draw the Anchor Points (used for slot assignment)
+            center_x = int((x1 + x2) / 2)
+            anchor_bottom = (center_x, int(y2 - ((y2 - y1) * 0.05)))
+            anchor_middle = (center_x, int(y2 - ((y2 - y1) * 0.20)))
+            
+            cv2.circle(frame, anchor_bottom, 5, (0, 0, 255), -1) 
+            cv2.circle(frame, anchor_middle, 5, (255, 0, 0), -1)
 
     # Feature 8: Draw multi-state slot overlays including Unknown
     def _draw_slots(self, frame, slot_status):
@@ -280,72 +330,36 @@ class StreamEngine:
         cv2.line(frame, self.config.entry_line[0], self.config.entry_line[1], (255, 0, 255), 2)
         cv2.line(frame, self.config.exit_line[0], self.config.exit_line[1], (0, 165, 255), 2)
 
-    # Feature 23: A* route planning with car-size clearance
-    def _build_grid(self, frame_shape, stable_status, clearance_radius=14):
-        h, w = frame_shape[:2]
-        step = max(8, self.config.grid_step)
-        rows = max(1, h // step)
-        cols = max(1, w // step)
-        blocked = np.zeros((rows, cols), dtype=np.uint8)
-
-        for slot_id, pts in self.zones.items():
-            if stable_status.get(slot_id, "Unknown") == "Free":
-                continue
-            mask = np.zeros((h, w), dtype=np.uint8)
-            cv2.fillPoly(mask, [np.array(pts, np.int32)], 255)
-            if clearance_radius > 0:
-                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (clearance_radius, clearance_radius))
-                mask = cv2.dilate(mask, kernel, iterations=1)
-            for r in range(rows):
-                for c in range(cols):
-                    y = min(h - 1, r * step + step // 2)
-                    x = min(w - 1, c * step + step // 2)
-                    if mask[y, x] > 0:
-                        blocked[r, c] = 1
-        return blocked, step
-
-    def _to_cell(self, point, step, blocked):
-        rows, cols = blocked.shape
-        c = min(cols - 1, max(0, point[0] // step))
-        r = min(rows - 1, max(0, point[1] // step))
-        return (r, c)
-
-    def _to_point(self, cell, step):
-        r, c = cell
-        return (c * step + step // 2, r * step + step // 2)
-
-    def _astar(self, blocked, start_cell, goal_cell):
-        rows, cols = blocked.shape
-        dirs = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]
-        best_cost = {start_cell: 0.0}
+    def _astar_graph(self, start_node, goal_node):
+        """Standard A* pathfinding, but traversing nodes/edges instead of pixels."""
+        if start_node not in self.road_nodes or goal_node not in self.road_nodes: 
+            return []
+            
+        open_heap = [(0.0, start_node)]
+        best_cost = {start_node: 0.0}
         parent = {}
-        open_heap = [(0.0, start_cell)]
-
-        def heuristic(a, b):
-            return math.hypot(a[0] - b[0], a[1] - b[1])
+        
+        def heuristic(n1, n2):
+            p1, p2 = self.road_nodes[n1], self.road_nodes[n2]
+            return math.hypot(p1[0] - p2[0], p1[1] - p2[1])
 
         while open_heap:
             _, curr = heapq.heappop(open_heap)
-            if curr == goal_cell:
+            if curr == goal_node:
                 path = [curr]
                 while curr in parent:
                     curr = parent[curr]
                     path.append(curr)
                 path.reverse()
                 return path
-            for dr, dc in dirs:
-                nr, nc = curr[0] + dr, curr[1] + dc
-                if nr < 0 or nc < 0 or nr >= rows or nc >= cols:
-                    continue
-                if blocked[nr, nc]:
-                    continue
-                nxt = (nr, nc)
-                step_cost = 1.414 if dr != 0 and dc != 0 else 1.0
+                
+            for neighbor in self.road_graph.get(curr, []):
+                step_cost = heuristic(curr, neighbor)
                 new_cost = best_cost[curr] + step_cost
-                if nxt not in best_cost or new_cost < best_cost[nxt]:
-                    best_cost[nxt] = new_cost
-                    parent[nxt] = curr
-                    heapq.heappush(open_heap, (new_cost + heuristic(nxt, goal_cell), nxt))
+                if neighbor not in best_cost or new_cost < best_cost[neighbor]:
+                    best_cost[neighbor] = new_cost
+                    parent[neighbor] = curr
+                    heapq.heappush(open_heap, (new_cost + heuristic(neighbor, goal_node), neighbor))
         return []
 
     def _path_instructions(self, points):
@@ -374,18 +388,41 @@ class StreamEngine:
         spread_y = max(p[1] for p in history) - min(p[1] for p in history)
         return {"length_px": max(20, spread_y + 40), "width_px": max(12, spread_x + 20)}
 
-    def _route_path(self, frame, start_point, end_point, stable_status, color):
-        blocked, step = self._build_grid(frame.shape, stable_status)
-        start_cell = self._to_cell(start_point, step, blocked)
-        goal_cell = self._to_cell(end_point, step, blocked)
-        blocked[start_cell[0], start_cell[1]] = 0
-        blocked[goal_cell[0], goal_cell[1]] = 0
-        cell_path = self._astar(blocked, start_cell, goal_cell)
-        if not cell_path:
-            return [], []
-        points = [self._to_point(cell, step) for cell in cell_path]
+    def _route_path(self, frame, start_point, end_point, color):
+        """
+        Stage 1: Snap car to nearest road node
+        Stage 2: Graph A* to the node nearest the destination
+        Stage 3: Snap from final node to the parking slot
+        """
+        # FALLBACK: If no road network is loaded, draw a straight Pink line so you know it failed!
+        if not self.road_nodes: 
+            cv2.line(frame, start_point, end_point, (255, 0, 255), 2)
+            return [start_point, end_point], ["Graph missing - driving direct"]
+            
+        def get_nearest(pt):
+            return min(self.road_nodes.keys(), key=lambda n: math.hypot(self.road_nodes[n][0]-pt[0], self.road_nodes[n][1]-pt[1]))
+            
+        # STAGE 1 & 3: Find the entry/exit nodes on the graph
+        start_node = get_nearest(start_point)
+        goal_node = get_nearest(end_point)
+        
+        # STAGE 2: Traverse the road network
+        node_path = self._astar_graph(start_node, goal_node)
+        
+        # FALLBACK: If the graph is disconnected (no path found), draw a straight Pink line
+        if not node_path: 
+            cv2.line(frame, start_point, end_point, (255, 0, 255), 2)
+            return [start_point, end_point], ["Graph disconnected - driving direct"]
+            
+        # Assemble the final route array
+        points = [start_point] + [tuple(self.road_nodes[n]) for n in node_path] + [end_point]
+        
+        # Draw the route
         for i in range(1, len(points)):
-            cv2.line(frame, points[i - 1], points[i], color, 2)
+            pt1 = (int(points[i - 1][0]), int(points[i - 1][1]))
+            pt2 = (int(points[i][0]), int(points[i][1]))
+            cv2.line(frame, pt1, pt2, color, 3)
+            
         return points, self._path_instructions(points)
 
     def _is_vehicle_in_any_slot(self, point):
@@ -396,27 +433,40 @@ class StreamEngine:
                 return True
         return False
 
-    # Feature 10: Entry/Exit guidance + Lot Full fallback
     def _draw_guidance(self, frame, stable_status, tracks):
         detailed_paths = []
         free_count = sum(1 for s in stable_status.values() if s == "Free")
         if free_count == 0:
             cv2.putText(frame, "LOT FULL - route to waiting area", (40, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 3)
 
+        # UPGRADE: Create a temporary registry to track which slots are claimed by moving cars
+        claimed_slots = set()
+
         for track_id, track in tracks.items():
             if track["class_id"] not in self.vehicle_classes:
                 continue
             vehicle_point = track["center"]
-            # Feature 36: For aisle vehicles, show both route options simultaneously
+            
             if self._is_vehicle_in_any_slot(vehicle_point):
                 continue
 
-            nearest_slot, target_center = find_nearest_free_slot(stable_status, self.zones, vehicle_point)
+            # 1. Route to the nearest free parking slot
+            # Pass the claimed_slots registry into the finder
+            nearest_slot, target_center = find_nearest_free_slot(stable_status, self.zones, vehicle_point, claimed_slots)
+            
             if nearest_slot and target_center:
-                slot_path, slot_steps = self._route_path(frame, vehicle_point, target_center, stable_status, (255, 255, 0))
+                # INSTANTLY claim this slot so the next car in the loop can't take it
+                claimed_slots.add(nearest_slot)
+                
+                slot_path, slot_steps = self._route_path(frame, vehicle_point, target_center, (255, 255, 0))
+                
+                cv2.circle(frame, target_center, 8, (0, 0, 255), -1)
+                cv2.putText(frame, f"PARK: {nearest_slot}", (target_center[0]-30, target_center[1]-15), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                
                 if len(slot_path) >= 2:
                     cv2.arrowedLine(frame, slot_path[-2], slot_path[-1], (255, 255, 0), 3, tipLength=0.05)
                     cv2.putText(frame, f"T{track_id}-> {nearest_slot}", (vehicle_point[0], vehicle_point[1] - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+                
                 detailed_paths.append(
                     {
                         "track_id": track_id,
@@ -428,10 +478,13 @@ class StreamEngine:
                     }
                 )
 
-            exit_path, exit_steps = self._route_path(frame, vehicle_point, self.config.exit_point, stable_status, (0, 165, 255))
+            # 2. Route to the general EXIT
+            exit_path, exit_steps = self._route_path(frame, vehicle_point, self.config.exit_point, (0, 165, 255))
+            
             if len(exit_path) >= 2:
                 cv2.arrowedLine(frame, exit_path[-2], exit_path[-1], (0, 165, 255), 3, tipLength=0.05)
                 cv2.putText(frame, f"T{track_id}-> EXIT", (vehicle_point[0], vehicle_point[1] + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
+            
             detailed_paths.append(
                 {
                     "track_id": track_id,
@@ -445,31 +498,12 @@ class StreamEngine:
 
         self.last_paths = detailed_paths
 
-    # Feature 12: Performance guardrails with frame skipping and rolling FPS
     def _update_fps(self):
         now = time.time()
         elapsed = max(1e-6, now - self.last_fps_ts)
         fps = 1.0 / elapsed
         self.health["fps"] = round((self.health["fps"] * 0.9) + (fps * 0.1), 2)
         self.last_fps_ts = now
-        
-    def _draw_yolo_boxes(self, frame, detections):
-        """Draws raw YOLO bounding boxes and the physical anchor points for debugging."""
-        for box in detections:
-            x1, y1, x2, y2, class_id = box
-            
-            # Draw the raw YOLO bounding box in Pink
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 255), 2)
-            cv2.putText(frame, f"YOLO cls:{class_id}", (x1, max(15, y1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2)
-            
-            # Draw the Anchor Points (used for slot assignment)
-            center_x = int((x1 + x2) / 2)
-            anchor_bottom = (center_x, int(y2 - ((y2 - y1) * 0.05)))
-            anchor_middle = (center_x, int(y2 - ((y2 - y1) * 0.20)))
-            
-            # Red dot for bottom anchor, Blue dot for middle anchor
-            cv2.circle(frame, anchor_bottom, 5, (0, 0, 255), -1) 
-            cv2.circle(frame, anchor_middle, 5, (255, 0, 0), -1)
 
     def process_frame(self, frame, force_infer=False):
         if frame is None:
@@ -487,22 +521,17 @@ class StreamEngine:
         else:
             detections = self.last_detections
 
-        # Replace these two lines in stream_engine.py:
+        # FIXED Error 2: Removed duplicate calculation. Compute raw once, update smoother if needed.
         slot_status_raw, _ = check_parking_status(detections, self.zones)
-        slot_status = self.smoother.update(slot_status_raw)
-
-        # WITH THIS:
-        # slot_status_raw, _ = check_parking_status(detections, self.zones)
         
-        # Feature 38: Bypass smoother in static mode so UI updates instantly
         if self.config.stream_mode == "static":
             slot_status = slot_status_raw
         else:
             slot_status = self.smoother.update(slot_status_raw)
+
         tracks = self.tracker.update(detections)
 
         self._draw_yolo_boxes(frame, detections)
-
         self._draw_slots(frame, slot_status)
         self._draw_markers(frame)
         self._draw_guidance(frame, slot_status, tracks)
@@ -521,16 +550,16 @@ class StreamEngine:
 
     # Feature 31: Static image processing path that updates health/summary/path APIs
     def process_image_file(self, image_path):
+        # Feature 39: Isolate static frames. Wipe all memory so nothing overlaps
         self.tracker = SimpleTracker() 
         self.last_detections = []
         self.last_paths = []
-
         
         frame = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
         if frame is None:
             self.health["last_error"] = f"image_not_found:{image_path}"
             return None
-        # Feature 37: Force fresh inference per static image request
+        
         rendered = self.process_frame(frame, force_infer=True)
         if rendered is None:
             return None
@@ -554,4 +583,4 @@ class StreamEngine:
 
     # Feature 24: Expose latest detailed guidance for UI/API
     def get_latest_paths(self):
-        return self.last_paths
+        return self.last_paths  

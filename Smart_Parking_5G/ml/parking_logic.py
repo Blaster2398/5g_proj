@@ -108,13 +108,18 @@ def check_parking_status(detections, parking_zones):
 
     return status, aisle_vehicles
 
-def find_nearest_free_slot(parking_status, parking_zones, vehicle_point):
+# UPGRADE: Added claimed_slots parameter to prevent double-booking
+def find_nearest_free_slot(parking_status, parking_zones, vehicle_point, claimed_slots=None):
+    if claimed_slots is None:
+        claimed_slots = set()
+        
     min_dist = float('inf')
     nearest_slot = None
     nearest_center = None
 
     for slot_id, status in parking_status.items():
-        if status == "Free":
+        # Only check slots that are Free AND haven't been claimed by another car yet
+        if status == "Free" and slot_id not in claimed_slots:
             pts = parking_zones[slot_id]
             center_x = int(sum([p[0] for p in pts]) / len(pts))
             center_y = int(sum([p[1] for p in pts]) / len(pts))
