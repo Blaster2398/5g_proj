@@ -80,10 +80,18 @@
     });
 
     // --- CORE EVENT LISTENERS ---
+    // --- CORE EVENT LISTENERS ---
     document.getElementById('btn-baseline').addEventListener('click', () => {
         changeImage('baseline.png');
         frameIndicator.innerText = "Baseline";
     });
+    
+    // ADD THIS NEW BLOCK:
+    document.getElementById('btn-live-poll').addEventListener('click', () => {
+        changeImage('latest.jpg');
+        frameIndicator.innerText = "Live Polling";
+    });
+
     document.getElementById('btn-live').addEventListener('click', () => {
         useLiveFeed();
         frameIndicator.innerText = "LIVE";

@@ -19,6 +19,7 @@ class RuntimeConfig:
         self.rtsp_url = os.getenv("PARKING_RTSP_URL", "rtsp://admin:password@192.168.1.100:554/stream")
         self.model_path = os.getenv("PARKING_MODEL_PATH", "ml/yolov8n.pt")
         self.zone_path = os.getenv("PARKING_ZONE_PATH", "data/parking_zones.json")
+        self.road_path = os.getenv("PARKING_ROAD_PATH", "data/road_network.json") # ADD THIS LINE
         self.stream_mode = os.getenv("PARKING_STREAM_MODE", "rtsp")  # rtsp or static
         self.static_image = os.getenv("PARKING_STATIC_IMAGE", "data/baseline.png")
         self.infer_every_n = int(os.getenv("PARKING_INFER_EVERY_N", "2"))
@@ -140,8 +141,11 @@ class StreamEngine:
         self.vehicle_classes = [2, 3, 5, 7]
         self.zones = load_zones(self.config.zone_path)
         
-        # FIXED Error 1: _load_road_network is now properly inside the class
-        self.road_nodes, self.road_graph = self._load_road_network("data/road_network.json")
+        # CHANGE THIS:
+        # self.road_nodes, self.road_graph = self._load_road_network("data/road_network.json")
+        
+        # TO THIS:
+        self.road_nodes, self.road_graph = self._load_road_network(self.config.road_path)
         
         self._load_manual_points()
         self.tracker = SimpleTracker()

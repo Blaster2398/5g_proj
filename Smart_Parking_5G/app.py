@@ -26,7 +26,13 @@ def index():
 def process_image():
     # Get the image filename from the URL (default to baseline)
     image_name = request.args.get('img', 'baseline.png')
-    image_path = os.path.join('data', image_name)
+    
+    # CHANGE THIS:
+    # image_path = os.path.join('data', image_name)
+    
+    # TO THIS:
+    data_dir = os.getenv("PARKING_DATA_DIR", "data")
+    image_path = os.path.join(data_dir, image_name)
     
     image_bytes = stream_engine.process_image_file(image_path)
     if image_bytes:
