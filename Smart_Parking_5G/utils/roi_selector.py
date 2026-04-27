@@ -4,12 +4,17 @@ import os
 import numpy as np
 import math
 
-os.makedirs('data', exist_ok=True)
+# --- MODE SWITCH ---
+# 0 = Map Static Data (Reads from data/baseline.png)
+# 1 = Map Live Data (Reads from live_data/latest.jpg)
+TARGET_MODE = 1 
 
-IMAGE_SOURCE = "data/baseline.png" 
-JSON_SLOTS = 'data/parking_zones.json'
-JSON_ROADS = 'data/road_network.json'
+DATA_DIR = "live_data" if TARGET_MODE == 1 else "data"
+os.makedirs(DATA_DIR, exist_ok=True)
 
+IMAGE_SOURCE = os.path.join(DATA_DIR, "latest.jpg" if TARGET_MODE == 1 else "baseline.png") 
+JSON_SLOTS = os.path.join(DATA_DIR, 'parking_zones.json')
+JSON_ROADS = os.path.join(DATA_DIR, 'road_network.json')
 # --- Application State ---
 mode = "SLOTS" # Starts in SLOTS mode
 

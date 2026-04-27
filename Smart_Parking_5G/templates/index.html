@@ -24,13 +24,16 @@
     </div>
 
     <div class="video-container">
-        <img id="dashboard-feed" src="/process_image?img=frame1.png" alt="Live Parking Feed">
+        <img id="dashboard-feed" src="" alt="Live Parking Feed">
     </div>
     
     <p id="summary">Loading slot summary...</p>
     <p id="mode">Point mode: none</p>
     <div id="paths">Loading route details...</div>
 
+    <script>
+        const IS_LIVE_MODE = {{ is_live }};
+    </script>
     <script src="/static/js/main.js"></script>
 </body>
 </html>

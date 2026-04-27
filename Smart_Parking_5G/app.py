@@ -19,21 +19,21 @@ def _require_api_key():
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    # Pass a flag to the HTML letting it know if we are in Live Mode
+    is_live = "true" if os.getenv("PARKING_DATA_DIR") == "live_data" else "false"
+    return render_template('index.html', is_live=is_live)
 
 # Feature 3: Static image endpoint now uses unified engine pipeline
 @app.route('/process_image')
 def process_image():
-    # Get the image filename from the URL (default to baseline)
     image_name = request.args.get('img', 'baseline.png')
-    
-    # CHANGE THIS:
-    # image_path = os.path.join('data', image_name)
-    
-    # TO THIS:
     data_dir = os.getenv("PARKING_DATA_DIR", "data")
     image_path = os.path.join(data_dir, image_name)
     
+    # SAFETY FIX: Prevent 500 crash if the file hasn't been generated yet
+    if not os.path.exists(image_path):
+        return jsonify({"error": f"File not found: {image_path}"}), 404
+        
     image_bytes = stream_engine.process_image_file(image_path)
     if image_bytes:
         return Response(image_bytes, mimetype='image/jpeg')

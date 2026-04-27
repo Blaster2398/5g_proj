@@ -6,6 +6,8 @@ import cv2
 import glob
 import shutil
 
+
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 # ==========================================
 # ⚙️ THE MASTER SWITCH
 # ==========================================
@@ -14,11 +16,14 @@ import shutil
 MODE = 1
 
 # Live Capture Configuration
-CAMERA_SOURCE = 0       # Change to "rtsp://..." if using an IP camera
+# Change '0' to your RTSP URL (either hardcoded or via environment variable)
+CAMERA_SOURCE = os.getenv("PARKING_RTSP_URL", "rtsp://admin:admin123@12.0.0.84:554/avstream/channel=1/stream=1.sdp") 
+
+
 CAPTURE_INTERVAL = 10   # Seconds between frame captures
 MAX_FRAMES = 10         # Rolling buffer size
 LIVE_DIR = "live_data"
-DATA_DIR = "data"
+DATA_DIR = "data"   
 
 def setup_live_environment():
     """Creates live_data folder and safely copies mapping files so they are isolated."""
@@ -32,22 +37,19 @@ def setup_live_environment():
             shutil.copy(src, dst)
 
 def capture_loop():
-    """Runs in the background: Captures, saves, and prunes frames."""
+    """Runs in the background: Captures, saves, prunes frames, and handles disconnects."""
     cap = cv2.VideoCapture(CAMERA_SOURCE)
     frame_counter = 1
     
     while True:
         ret, frame = cap.read()
         if ret:
-            # We pad the number with zeros so they sort correctly alphabetically (e.g., live_00001.jpg)
             filename = os.path.join(LIVE_DIR, f"live_{frame_counter:05d}.jpg")
             cv2.imwrite(filename, frame)
             print(f"[CAMERA] Captured {filename}")
             
-            # OVERWRITE "latest.jpg" so the frontend always has a fixed target to refresh
             cv2.imwrite(os.path.join(LIVE_DIR, "latest.jpg"), frame)
             
-            # Rolling Buffer Cleanup
             saved_frames = sorted(glob.glob(os.path.join(LIVE_DIR, "live_*.jpg")))
             if len(saved_frames) > MAX_FRAMES:
                 for old_frame in saved_frames[:-MAX_FRAMES]:
@@ -55,8 +57,13 @@ def capture_loop():
                     print(f"[CLEANUP] Deleted {old_frame}")
             
             frame_counter += 1
-                    
-        time.sleep(CAPTURE_INTERVAL)
+            time.sleep(CAPTURE_INTERVAL)
+        else:
+            # SAFETY FIX: If the camera drops, release it, wait, and reconnect
+            print("[CAMERA] Warning: Stream dropped or timed out. Reconnecting in 3s...")
+            cap.release()
+            time.sleep(3)
+            cap = cv2.VideoCapture(CAMERA_SOURCE)
 
 if __name__ == "__main__":
     if MODE == 0:

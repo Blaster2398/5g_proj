@@ -2,6 +2,7 @@
     let pointMode = null;
     let currentFeed = 'static';
     let currentFrameNum = 1;
+    let pollInterval = null; // NEW: Tracks our auto-refresh timer
 
     const feed = document.getElementById('dashboard-feed');
     const summary = document.getElementById('summary');
@@ -9,12 +10,31 @@
     const paths = document.getElementById('paths');
     const frameIndicator = document.getElementById('frame-indicator');
 
+    // NEW: Stop auto-refreshing when we switch away from Live Polling
+    function stopPolling() {
+        if (pollInterval) {
+            clearInterval(pollInterval);
+            pollInterval = null;
+        }
+    }
+
+    // NEW: Start auto-refreshing the latest.jpg image every 2 seconds
+    function startPolling() {
+        currentFeed = 'poll';
+        stopPolling(); 
+        pollInterval = setInterval(() => {
+            feed.src = `/process_image?img=latest.jpg&t=${Date.now()}`;
+        }, 2000);
+    }
+
     function changeImage(imageName) {
+        stopPolling(); // Stop polling if we go back to static frames
         feed.src = `/process_image?img=${imageName}&t=${Date.now()}`;
         currentFeed = 'static';
     }
 
     function useLiveFeed() {
+        stopPolling(); // Stop polling if we switch to raw RTSP feed
         feed.src = '/video_feed';
         currentFeed = 'live';
     }
@@ -61,7 +81,6 @@
         }
     }
 
-    // --- FRAME NAVIGATION LOGIC ---
     function loadCurrentFrame() {
         changeImage(`frame${currentFrameNum}.png`);
         frameIndicator.innerText = `Frame ${currentFrameNum}`;
@@ -79,27 +98,27 @@
         loadCurrentFrame();
     });
 
-    // --- CORE EVENT LISTENERS ---
-    // --- CORE EVENT LISTENERS ---
     document.getElementById('btn-baseline').addEventListener('click', () => {
         changeImage('baseline.png');
         frameIndicator.innerText = "Baseline";
     });
     
-    // ADD THIS NEW BLOCK:
+    // UPDATED: This button now triggers the auto-refresh loop
     document.getElementById('btn-live-poll').addEventListener('click', () => {
-        changeImage('latest.jpg');
+        startPolling(); 
         frameIndicator.innerText = "Live Polling";
+        // Force an immediate load before the first interval triggers
+        feed.src = `/process_image?img=latest.jpg&t=${Date.now()}`; 
     });
 
     document.getElementById('btn-live').addEventListener('click', () => {
         useLiveFeed();
         frameIndicator.innerText = "LIVE";
     });
+
     document.getElementById('btn-set-entry').addEventListener('click', () => setPointMode('entry'));
     document.getElementById('btn-set-exit').addEventListener('click', () => setPointMode('exit'));
 
-    // --- CLICK TO SET POINTS ---
     feed.addEventListener('click', async (ev) => {
         if (!pointMode) return;
         const rect = feed.getBoundingClientRect();
@@ -114,6 +133,8 @@
         
         if (currentFeed === 'live') {
             useLiveFeed();
+        } else if (currentFeed === 'poll') {
+            feed.src = `/process_image?img=latest.jpg&t=${Date.now()}`;
         } else {
             const base = feed.src.includes('&t=') ? feed.src.split('&t=')[0] : feed.src;
             feed.src = `${base}&t=${Date.now()}`;
@@ -125,4 +146,13 @@
     refreshPaths();
     setInterval(refreshSummary, 2000);
     setInterval(refreshPaths, 2000);
+
+    // AUTO-START LOGIC
+    if (IS_LIVE_MODE) {
+        // If the server is in Live Mode, auto-click the polling button
+        document.getElementById('btn-live-poll').click();
+    } else {
+        // If the server is in Static Mode, load Frame 1
+        loadCurrentFrame();
+    }
 })();

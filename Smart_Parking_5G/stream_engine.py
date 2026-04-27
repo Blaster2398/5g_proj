@@ -16,7 +16,7 @@ from ml.parking_logic import SlotStateSmoother, check_parking_status, find_neare
 # Feature 1: Centralized runtime configuration for production deployment
 class RuntimeConfig:
     def __init__(self):
-        self.rtsp_url = os.getenv("PARKING_RTSP_URL", "rtsp://admin:password@192.168.1.100:554/stream")
+        self.rtsp_url = os.getenv("PARKING_RTSP_URL", "rtsp://admin:admin123@12.0.0.84:554/avstream/channel=1/stream=1.sdp") 
         self.model_path = os.getenv("PARKING_MODEL_PATH", "ml/yolov8n.pt")
         self.zone_path = os.getenv("PARKING_ZONE_PATH", "data/parking_zones.json")
         self.road_path = os.getenv("PARKING_ROAD_PATH", "data/road_network.json") # ADD THIS LINE
