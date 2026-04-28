@@ -1,16 +1,19 @@
 (() => {
-    let pointMode = null;
-    let currentFeed = 'static';
     let currentFrameNum = 1;
-    let pollInterval = null; // NEW: Tracks our auto-refresh timer
+    let pollInterval = null;
 
     const feed = document.getElementById('dashboard-feed');
     const summary = document.getElementById('summary');
-    const mode = document.getElementById('mode');
     const paths = document.getElementById('paths');
     const frameIndicator = document.getElementById('frame-indicator');
 
-    // NEW: Stop auto-refreshing when we switch away from Live Polling
+    // UI Elements
+    const modeText = document.getElementById('ui-mode-text');
+    const toggleBtn = document.getElementById('btn-toggle-mode');
+    const staticControls = document.getElementById('static-controls');
+    const liveControls = document.getElementById('live-controls');
+
+    // --- CORE FUNCTIONS ---
     function stopPolling() {
         if (pollInterval) {
             clearInterval(pollInterval);
@@ -18,41 +21,18 @@
         }
     }
 
-    // NEW: Start auto-refreshing the latest.jpg image every 2 seconds
     function startPolling() {
-        currentFeed = 'poll';
-        stopPolling(); 
+        stopPolling();
+        // Loop every 1.5 seconds to grab the newest camera frame
         pollInterval = setInterval(() => {
-            feed.src = `/process_image?img=latest.jpg&t=${Date.now()}`;
-        }, 2000);
-    }
-
-    function changeImage(imageName) {
-        stopPolling(); // Stop polling if we go back to static frames
-        feed.src = `/process_image?img=${imageName}&t=${Date.now()}`;
-        currentFeed = 'static';
-    }
-
-    function useLiveFeed() {
-        stopPolling(); // Stop polling if we switch to raw RTSP feed
-        feed.src = '/video_feed';
-        currentFeed = 'live';
-    }
-
-    function setPointMode(nextMode) {
-        pointMode = nextMode;
-        mode.innerText = `Point mode: ${nextMode}`;
-    }
-
-    async function saveManualPoint(kind, x, y) {
-        await fetch('/api/manual_points', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ [`${kind}_point`]: [Math.round(x), Math.round(y)] }),
-        });
+            if (feed) feed.src = `/process_image?img=latest.jpg&t=${Date.now()}`;
+        }, 1500);
+        // Force the first load immediately
+        if (feed) feed.src = `/process_image?img=latest.jpg&t=${Date.now()}`;
     }
 
     async function refreshSummary() {
+        if (!summary) return;
         try {
             const res = await fetch('/api/slot_summary');
             const data = await res.json();
@@ -63,6 +43,7 @@
     }
 
     async function refreshPaths() {
+        if (!paths) return;
         try {
             const res = await fetch('/api/path_details');
             const data = await res.json();
@@ -71,9 +52,8 @@
                 return;
             }
             const lines = data.paths.map((p) => {
-                const dims = p.car_dimensions || {};
                 const steps = (p.instructions || []).join(' -> ');
-                return `Track ${p.track_id} | Target: ${p.target} | Car(px): L=${dims.length_px || 0}, W=${dims.width_px || 0} | Route: ${steps}`;
+                return `Track ${p.track_id} | Target: ${p.target} | Route: ${steps}`;
             });
             paths.innerText = lines.join('\n');
         } catch (_e) {
@@ -81,65 +61,67 @@
         }
     }
 
-    function loadCurrentFrame() {
-        changeImage(`frame${currentFrameNum}.png`);
-        frameIndicator.innerText = `Frame ${currentFrameNum}`;
+    // --- EVENT LISTENERS ---
+
+    // 1. Mode Toggle
+    if (toggleBtn) {
+        toggleBtn.addEventListener('click', async () => {
+            const targetMode = IS_LIVE_MODE ? 'static' : 'live';
+            await fetch('/api/switch_mode', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({mode: targetMode})
+            });
+
+            alert(`Switching to ${targetMode.toUpperCase()} Mode. Server is restarting...`);
+            setTimeout(() => location.reload(), 3000);
+        });
     }
 
-    document.getElementById('btn-prev').addEventListener('click', () => {
-        if (currentFrameNum > 1) {
-            currentFrameNum--;
-            loadCurrentFrame();
-        }
-    });
+    // 2. Frame Navigation (Static Mode)
+    const btnPrev = document.getElementById('btn-prev');
+    const btnNext = document.getElementById('btn-next');
 
-    document.getElementById('btn-next').addEventListener('click', () => {
-        currentFrameNum++;
-        loadCurrentFrame();
-    });
+    if (btnPrev && btnNext) {
+        btnPrev.addEventListener('click', () => {
+            if (IS_LIVE_MODE) return;
+            if (currentFrameNum > 1) {
+                currentFrameNum--;
+                if (feed) feed.src = `/process_image?img=frame${currentFrameNum}.png&t=${Date.now()}`;
+                if (frameIndicator) frameIndicator.innerText = `Frame ${currentFrameNum}`;
+            }
+        });
 
-    document.getElementById('btn-baseline').addEventListener('click', () => {
-        changeImage('baseline.png');
-        frameIndicator.innerText = "Baseline";
-    });
-    
-    // UPDATED: This button now triggers the auto-refresh loop
-    document.getElementById('btn-live-poll').addEventListener('click', () => {
-        startPolling(); 
-        frameIndicator.innerText = "Live Polling";
-        // Force an immediate load before the first interval triggers
-        feed.src = `/process_image?img=latest.jpg&t=${Date.now()}`; 
-    });
+        btnNext.addEventListener('click', () => {
+            if (IS_LIVE_MODE) return;
+            currentFrameNum++;
+            if (feed) feed.src = `/process_image?img=frame${currentFrameNum}.png&t=${Date.now()}`;
+            if (frameIndicator) frameIndicator.innerText = `Frame ${currentFrameNum}`;
+        });
+    }
 
-    document.getElementById('btn-live').addEventListener('click', () => {
-        useLiveFeed();
-        frameIndicator.innerText = "LIVE";
-    });
+    // 3. Calibration
+    const btnCapture = document.getElementById('btn-capture-base');
+    const btnDraw = document.getElementById('btn-draw-roi');
 
-    document.getElementById('btn-set-entry').addEventListener('click', () => setPointMode('entry'));
-    document.getElementById('btn-set-exit').addEventListener('click', () => setPointMode('exit'));
+    if (btnCapture) {
+        btnCapture.addEventListener('click', async () => {
+            try {
+                const res = await fetch('/api/capture_baseline', { method: 'POST' });
+                if (res.ok) alert("Live Baseline captured! You can now Calibrate.");
+                else alert("Error capturing baseline.");
+            } catch (e) {
+                alert("Network error capturing baseline.");
+            }
+        });
+    }
 
-    feed.addEventListener('click', async (ev) => {
-        if (!pointMode) return;
-        const rect = feed.getBoundingClientRect();
-        const scaleX = feed.naturalWidth / rect.width;
-        const scaleY = feed.naturalHeight / rect.height;
-        const x = (ev.clientX - rect.left) * scaleX;
-        const y = (ev.clientY - rect.top) * scaleY;
-        
-        await saveManualPoint(pointMode, x, y);
-        mode.innerText = `${pointMode} point saved at (${Math.round(x)}, ${Math.round(y)})`;
-        pointMode = null;
-        
-        if (currentFeed === 'live') {
-            useLiveFeed();
-        } else if (currentFeed === 'poll') {
-            feed.src = `/process_image?img=latest.jpg&t=${Date.now()}`;
-        } else {
-            const base = feed.src.includes('&t=') ? feed.src.split('&t=')[0] : feed.src;
-            feed.src = `${base}&t=${Date.now()}`;
-        }
-    });
+    if (btnDraw) {
+        btnDraw.addEventListener('click', async () => {
+            alert("Check your taskbar! The OpenCV Calibrator is opening.");
+            await fetch('/api/launch_calibrator', { method: 'POST' });
+        });
+    }
 
     // --- INITIALIZATION ---
     refreshSummary();
@@ -147,12 +129,20 @@
     setInterval(refreshSummary, 2000);
     setInterval(refreshPaths, 2000);
 
-    // AUTO-START LOGIC
+    // Apply Mode-Specific UI and Logic
     if (IS_LIVE_MODE) {
-        // If the server is in Live Mode, auto-click the polling button
-        document.getElementById('btn-live-poll').click();
+        if (modeText) {
+            modeText.innerText = "LIVE POLLING";
+            modeText.style.color = "#ff4757";
+        }
+        if (toggleBtn) toggleBtn.innerText = "🔄 Switch to STATIC Mode";
+        if (staticControls) staticControls.style.display = "none";
+        if (liveControls) liveControls.style.display = "block";
+
+        startPolling();
     } else {
-        // If the server is in Static Mode, load Frame 1
-        loadCurrentFrame();
+        // Static Mode defaults
+        if (feed) feed.src = `/process_image?img=baseline.png&t=${Date.now()}`;
+        if (frameIndicator) frameIndicator.innerText = "Baseline";
     }
 })();

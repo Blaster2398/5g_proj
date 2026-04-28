@@ -24,21 +24,29 @@ def index():
     return render_template('index.html', is_live=is_live)
 
 # Feature 3: Static image endpoint now uses unified engine pipeline
+# Feature 3: Static image endpoint dynamically checks active directory
+# Feature 3: Static image endpoint dynamically checks active directory
 @app.route('/process_image')
 def process_image():
     image_name = request.args.get('img', 'baseline.png')
-    data_dir = os.getenv("PARKING_DATA_DIR", "data")
+    
+    is_live = "live" in stream_engine.config.zone_path
+    data_dir = "live_data" if is_live else "data"
     image_path = os.path.join(data_dir, image_name)
     
-    # SAFETY FIX: Prevent 500 crash if the file hasn't been generated yet
+    # --- FALLBACK PROTECTION ---
     if not os.path.exists(image_path):
-        return jsonify({"error": f"File not found: {image_path}"}), 404
-        
+        # If the requested image isn't ready, serve the baseline so the UI doesn't break
+        fallback = os.path.join(data_dir, "live_baseline.jpg" if is_live else "baseline.png")
+        if os.path.exists(fallback):
+            image_path = fallback
+        else:
+            return jsonify({"error": f"File not found: {image_path}"}), 404
+            
     image_bytes = stream_engine.process_image_file(image_path)
     if image_bytes:
         return Response(image_bytes, mimetype='image/jpeg')
-    else:
-        return f"Error: Could not process {image_path}", 404
+    return f"Error: Could not process {image_path}", 404
 
 # Feature 13: Real RTSP MJPEG endpoint wired to production engine
 @app.route('/video_feed')
@@ -67,25 +75,30 @@ def ready():
     return jsonify({"ready": zones_loaded}), (200 if zones_loaded else 503)
 
 # Feature 15: Slot summary API for dashboard integration
+# Feature 15: Slot summary API for dashboard integration
+# Feature 15: Slot summary API for dashboard integration
 @app.route('/api/slot_summary')
 def slot_summary():
-    unauthorized = _require_api_key()
-    if unauthorized:
-        return unauthorized
-    # Feature 32: Auto-warm static mode so dashboard summary is never stuck at 'starting'
+    # 1. Get current health
     health_data = stream_engine.get_health()
-    if health_data.get("status") == "starting" and config.stream_mode == "static":
-        stream_engine.process_image_file(config.static_image)
-        health_data = stream_engine.get_health()
-    return jsonify(
-        {
-            "free_slots": health_data.get("free_slots", 0),
-            "occupied_slots": health_data.get("occupied_slots", 0),
-            "unknown_slots": health_data.get("unknown_slots", 0),
-            "fps": health_data.get("fps", 0.0),
-            "status": health_data.get("status", "unknown"),
-        }
-    )
+    
+    # 2. AUTO-WARM: If it's stuck on 'starting', force it to process the active image
+    if health_data.get("status") == "starting":
+        is_live = "live" in stream_engine.config.zone_path
+        data_dir = "live_data" if is_live else "data"
+        img_path = os.path.join(data_dir, "latest.jpg" if is_live else "baseline.png")
+        
+        if os.path.exists(img_path):
+            stream_engine.process_image_file(img_path)
+            health_data = stream_engine.get_health()
+
+    return jsonify({
+        "free_slots": health_data.get("free_slots", 0),
+        "occupied_slots": health_data.get("occupied_slots", 0),
+        "unknown_slots": health_data.get("unknown_slots", 0),
+        "fps": health_data.get("fps", 0.0),
+        "status": health_data.get("status", "unknown"),
+    })
 
 # Feature 25: API for manual entry/exit updates from dashboard clicks
 @app.route('/api/manual_points', methods=['GET', 'POST'])
@@ -120,6 +133,61 @@ def path_details():
     if unauthorized:
         return unauthorized
     return jsonify({"paths": stream_engine.get_latest_paths()})
+
+import shutil
+import subprocess
+
+# Feature: Capture current live frame as permanent baseline
+@app.route('/api/capture_baseline', methods=['POST'])
+def capture_baseline():
+    live_dir = os.getenv("PARKING_DATA_DIR", "live_data")
+    latest_img = os.path.join(live_dir, "latest.jpg")
+    baseline_img = os.path.join(live_dir, "live_baseline.jpg")
+    
+    if os.path.exists(latest_img):
+        shutil.copy(latest_img, baseline_img)
+        return jsonify({"status": "success", "message": "Baseline captured!"})
+    return jsonify({"error": "No live frames found yet."}), 404
+
+# Feature: Launch the OpenCV drawing tool from the web UI
+# Feature: Launch the OpenCV drawing tool from the web UI
+# Feature: Launch the OpenCV drawing tool dynamically for the active mode
+@app.route('/api/launch_calibrator', methods=['POST'])
+def launch_calibrator():
+    try:
+        # Detect which mode the engine is currently running in
+        is_live = "live" in stream_engine.config.zone_path
+        target_arg = "live" if is_live else "static"
+        
+        # Pass the mode argument to the script
+        subprocess.run(["python", "utils/roi_selector.py", target_arg])
+        
+        # Hot-reload the JSONs when the window closes
+        stream_engine.reload_data()
+        
+        return jsonify({"status": "success", "message": f"Calibrated {target_arg} maps."})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+# Feature: Dynamically switch between Static and Live directories
+@app.route('/api/switch_mode', methods=['POST'])
+def switch_mode():
+    data = request.json or {}
+    target = data.get('mode', 'static')
+    
+    is_live = "live" in stream_engine.config.zone_path
+    current_mode = "live" if is_live else "static"
+    
+    # 1. Do nothing if we are already in the requested mode
+    if target == current_mode:
+        return jsonify({"status": "ignored", "message": "Already in this mode."})
+    
+    # 2. Save the requested mode to the state file
+    with open("system_state.txt", "w") as f:
+        f.write(target)
+        
+    # 3. Aggressively shut down the Flask server to trigger the reboot in run_system.py
+    os._exit(0)
 
 if __name__ == "__main__":
     port = int(os.getenv("PARKING_APP_PORT", "5000"))

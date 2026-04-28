@@ -2,6 +2,7 @@ import heapq
 import json
 import math
 import os
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 import time
 from collections import deque
 from datetime import datetime
@@ -137,9 +138,15 @@ class StreamEngine:
     def __init__(self, config=None):
         self.config = config or RuntimeConfig()
         self.model = YOLO(self.config.model_path)
-        self.target_classes = [2, 3, 5, 7, 15, 16]
-        self.vehicle_classes = [2, 3, 5, 7]
+        
+        # --- TEST MODE: Add '0' (Person) so it detects you as a car ---
+        self.target_classes = [0, 2, 3, 5, 7, 15, 16]
+        self.vehicle_classes = [0, 2, 3, 5, 7]
+        # --------------------------------------------------------------
+        
         self.zones = load_zones(self.config.zone_path)
+        self.road_nodes, self.road_graph = self._load_road_network(self.config.road_path)
+        self._load_manual_points()
         
         # CHANGE THIS:
         # self.road_nodes, self.road_graph = self._load_road_network("data/road_network.json")
@@ -168,6 +175,12 @@ class StreamEngine:
         self.last_paths = []
         self.frame_count = 0
         self.last_fps_ts = time.time()
+
+    def reload_data(self):
+        """Forces the engine to re-read the JSON files from disk."""
+        self.zones = load_zones(self.config.zone_path)
+        self.road_nodes, self.road_graph = self._load_road_network(self.config.road_path)
+        self._load_manual_points()
 
     def _load_road_network(self, filepath):
         if not os.path.exists(filepath):
@@ -246,6 +259,11 @@ class StreamEngine:
 
     def _open_capture(self):
         source = self.config.rtsp_url if self.config.stream_mode == "rtsp" else self.config.static_image
+        
+        # FIX: If the source is a number (like "0"), convert it to an integer for local webcams
+        if isinstance(source, str) and source.isdigit():
+            source = int(source)
+            
         cap = cv2.VideoCapture(source)
         if self.config.stream_mode == "rtsp":
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -552,12 +570,20 @@ class StreamEngine:
             return None
         return buffer.tobytes()
 
-    # Feature 31: Static image processing path that updates health/summary/path APIs
+   
     def process_image_file(self, image_path):
-        # Feature 39: Isolate static frames. Wipe all memory so nothing overlaps
-        self.tracker = SimpleTracker() 
-        self.last_detections = []
-        self.last_paths = []
+        # FIX: Wipe memory for ALL static frames so cars don't "teleport" between images.
+        # Only preserve tracking history if we are polling the live camera stream.
+        if "latest.jpg" not in image_path:
+            self.tracker = SimpleTracker() 
+            self.last_detections = []
+            self.last_paths = []
+            # Reset smoother so static frames show occupancy instantly without needing 3 frames of confirmation
+            self.smoother = SlotStateSmoother(
+                enter_confirm_frames=self.config.enter_confirm_frames,
+                exit_confirm_frames=self.config.exit_confirm_frames,
+                unknown_timeout_frames=self.config.unknown_timeout_frames,
+            )
         
         frame = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
         if frame is None:
