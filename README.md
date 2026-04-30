@@ -1,4 +1,4 @@
-````markdown
+
 # 5G Smart Parking & Autonomous Routing System
 
 ### Edge-Computed Computer Vision Pipeline for Real-Time Vehicle Tracking and Topological Pathfinding
@@ -224,8 +224,11 @@ Ensure all coordinates are cast to integers before drawing.
 ## Developed By
 
 Aryan Patel
+
 Shreyash Bharati
+
+Yash Varshney
+
 ECE Department
 
-```
-```
+
