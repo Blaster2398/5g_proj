@@ -302,7 +302,7 @@ class StreamEngine:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
             
         # Added conf=0.50 to filter out low-confidence hallucinations
-        results = self.model(frame, classes=self.target_classes, conf=0.40, imgsz=1280, verbose=False)[0]
+        results = self.model(frame, classes=self.target_classes, conf=0.40, imgsz=640, verbose=False)[0]
         detections = []
         for box in results.boxes.data.tolist():
             x1, y1, x2, y2, _score, class_id = box
@@ -461,62 +461,62 @@ class StreamEngine:
         if free_count == 0:
             cv2.putText(frame, "LOT FULL - route to waiting area", (40, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 3)
 
-        # UPGRADE: Create a temporary registry to track which slots are claimed by moving cars
         claimed_slots = set()
 
         for track_id, track in tracks.items():
             if track["class_id"] not in self.vehicle_classes:
                 continue
-            vehicle_point = track["center"]
+                
+            # STRICT INT CASTING (Prevents the crash)
+            vehicle_point = (int(track["center"][0]), int(track["center"][1]))
             
             if self._is_vehicle_in_any_slot(vehicle_point):
                 continue
 
-            # 1. Route to the nearest free parking slot
-            # Pass the claimed_slots registry into the finder
+            # --- ROUTE 1: NEAREST PARKING SLOT ---
             nearest_slot, target_center = find_nearest_free_slot(stable_status, self.zones, vehicle_point, claimed_slots)
             
             if nearest_slot and target_center:
-                # INSTANTLY claim this slot so the next car in the loop can't take it
                 claimed_slots.add(nearest_slot)
                 
-                slot_path, slot_steps = self._route_path(frame, vehicle_point, target_center, (255, 255, 0))
+                # Cast the slot center to strict integers
+                tc = (int(target_center[0]), int(target_center[1]))
                 
-                cv2.circle(frame, target_center, 8, (0, 0, 255), -1)
-                cv2.putText(frame, f"PARK: {nearest_slot}", (target_center[0]-30, target_center[1]-15), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                slot_path, slot_steps = self._route_path(frame, vehicle_point, tc, (255, 255, 0))
+                
+                cv2.circle(frame, tc, 8, (0, 0, 255), -1)
+                cv2.putText(frame, f"PARK: {nearest_slot}", (tc[0]-30, tc[1]-15), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                 
                 if len(slot_path) >= 2:
                     cv2.arrowedLine(frame, slot_path[-2], slot_path[-1], (255, 255, 0), 3, tipLength=0.05)
                     cv2.putText(frame, f"T{track_id}-> {nearest_slot}", (vehicle_point[0], vehicle_point[1] - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
                 
-                detailed_paths.append(
-                    {
-                        "track_id": track_id,
-                        "option": "nearest_slot",
-                        "target": nearest_slot,
-                        "path": slot_path,
-                        "instructions": slot_steps,
-                        "car_dimensions": self._compute_car_dimensions(track),
-                    }
-                )
+                detailed_paths.append({
+                    "track_id": track_id,
+                    "option": "nearest_slot",
+                    "target": nearest_slot,
+                    "path": slot_path,
+                    "instructions": slot_steps,
+                    "car_dimensions": self._compute_car_dimensions(track),
+                })
 
-            # 2. Route to the general EXIT
-            exit_path, exit_steps = self._route_path(frame, vehicle_point, self.config.exit_point, (0, 165, 255))
+            # --- ROUTE 2: THE EXIT DOOR ---
+            exit_pt = (int(self.config.exit_point[0]), int(self.config.exit_point[1]))
+            exit_path, exit_steps = self._route_path(frame, vehicle_point, exit_pt, (0, 165, 255))
             
             if len(exit_path) >= 2:
                 cv2.arrowedLine(frame, exit_path[-2], exit_path[-1], (0, 165, 255), 3, tipLength=0.05)
+                # Offset the exit text slightly downwards so it doesn't overlap the parking text
                 cv2.putText(frame, f"T{track_id}-> EXIT", (vehicle_point[0], vehicle_point[1] + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
             
-            detailed_paths.append(
-                {
-                    "track_id": track_id,
-                    "option": "exit",
-                    "target": "EXIT",
-                    "path": exit_path,
-                    "instructions": exit_steps,
-                    "car_dimensions": self._compute_car_dimensions(track),
-                }
-            )
+            detailed_paths.append({
+                "track_id": track_id,
+                "option": "exit",
+                "target": "EXIT",
+                "path": exit_path,
+                "instructions": exit_steps,
+                "car_dimensions": self._compute_car_dimensions(track),
+            })
 
         self.last_paths = detailed_paths
 

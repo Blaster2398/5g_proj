@@ -48,30 +48,47 @@ if __name__ == "__main__":
             # 1. Start Flask App in the background
             flask_process = subprocess.Popen(["python", "app.py"], env=env)
             
-            # 2. Run Camera Capture in the MAIN thread (Fixes Windows freezing!)
+            # # 2. Run Camera Capture in the MAIN thread (Fixes Windows freezing!)
             CAMERA_SOURCE = os.getenv("PARKING_RTSP_URL", "0")
+
+            # 2. Run Camera Capture in the MAIN thread
+            # NOTE: Add "/video" to the end of the URL your phone gives you!
+            # CAMERA_SOURCE = "http://10.150.61.102:8080/video" # use the ipcamera stream 
+
             cam_id = int(CAMERA_SOURCE) if str(CAMERA_SOURCE).isdigit() else CAMERA_SOURCE
             
             print(f"[CAMERA] Connecting to source: {cam_id}")
             cap = cv2.VideoCapture(cam_id, cv2.CAP_DSHOW) if isinstance(cam_id, int) else cv2.VideoCapture(cam_id)
             
+            # --- NEW BUFFER DRAINING CAPTURE LOOP ---
             frame_counter = 1
+            last_save_time = 0
+            
             while flask_process.poll() is None: # Run while Flask is alive
                 ret, frame = cap.read()
+                
                 if ret:
-                    filename = os.path.join(LIVE_DIR, f"live_{frame_counter:05d}.jpg")
-                    cv2.imwrite(filename, frame)
-                    cv2.imwrite(os.path.join(LIVE_DIR, "latest.jpg"), frame)
+                    current_time = time.time()
                     
-                    saved_frames = sorted(glob.glob(os.path.join(LIVE_DIR, "live_*.jpg")))
-                    if len(saved_frames) > MAX_FRAMES:
-                        for old_frame in saved_frames[:-MAX_FRAMES]:
-                            os.remove(old_frame)
-                    
-                    frame_counter += 1
-                    time.sleep(CAPTURE_INTERVAL)
+                    # Only save the frame if CAPTURE_INTERVAL (1.0s) has passed
+                    if current_time - last_save_time >= CAPTURE_INTERVAL:
+                        filename = os.path.join(LIVE_DIR, f"live_{frame_counter:05d}.jpg")
+                        cv2.imwrite(filename, frame)
+                        cv2.imwrite(os.path.join(LIVE_DIR, "latest.jpg"), frame)
+                        
+                        # Cleanup old frames
+                        saved_frames = sorted(glob.glob(os.path.join(LIVE_DIR, "live_*.jpg")))
+                        if len(saved_frames) > MAX_FRAMES:
+                            for old_frame in saved_frames[:-MAX_FRAMES]:
+                                os.remove(old_frame)
+                        
+                        print(f"[CAMERA] Saved {filename}")
+                        frame_counter += 1
+                        last_save_time = current_time
+                        
                 else:
-                    time.sleep(0.5)
+                    # If the Wi-Fi connection drops, wait slightly and try again
+                    time.sleep(0.1)
             
             print("[CAMERA] Shutting down...")
             cap.release()

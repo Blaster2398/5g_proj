@@ -124,7 +124,9 @@ if target_mode == "static":
     cv2.resizeWindow(window_name, 1280, 720)
 else:
     # Live webcam frames are smaller; use 1:1 pixel sizing
-    cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
+    # cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
+    cv2.resizeWindow(window_name, 1280, 720)
 
 cv2.setMouseCallback(window_name, mouse_callback)
 
