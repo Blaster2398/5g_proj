@@ -88,7 +88,7 @@ Implemented via a custom `SlotStateSmoother` state machine.
 
 ### Step 1: Clone Repository
 ```bash
-git clone https://github.com/yourusername/Smart_Parking_5G.git
+git clone https://github.com/Blaster2398/5g_proj.git
 cd Smart_Parking_5G
 ````
 
